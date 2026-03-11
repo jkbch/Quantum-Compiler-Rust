@@ -1,0 +1,173 @@
+grammar;
+use std::str::FromStr;
+use crate::ast::*;
+
+// Define a generic comma-separated list macro
+Comma<T>: Vec<T> = {
+    <mut v:(<T> ",")*> <e:T?> => match e {
+        None => v,
+        Some(e) => {
+            v.push(e);
+            v
+        }
+    }
+};
+
+// Expression grammar
+pub Exp: Exp = {
+    <e:Exp1> => e,
+    <l:Exp> <op:CMP> <r:Exp1> => Exp::Binary(Box::new(l), op, Box::new(r))
+};
+Exps: Vec<Exp> = Comma<Exp>;
+
+Exp1: Exp = {
+    <e:Exp2> => e,
+    <l:Exp1> <op:AS> <r:Exp2> => Exp::Binary(Box::new(l), op, Box::new(r))
+};
+
+Exp2: Exp = {
+    <e:Exp3> => e,
+    <l:Exp2> <op:MD> <r:Exp3> => Exp::Binary(Box::new(l), op, Box::new(r))
+};
+
+Exp3: Exp = {
+    <e:Exp4> => e,
+    <l:Exp4> <op:PE> <r:Exp3> => Exp::Binary(Box::new(l), op, Box::new(r))
+};
+
+Exp4: Exp = {
+    <i:INT> => Exp::Int(i),
+    <f:FLOAT> => Exp::Float(f),
+    <c:NAMED_CONSTANT> => Exp::NamedConst(c),
+    <v:Lval> => Exp::Lval(v),
+    <op:UNOP> <e:Exp4> => Exp::Unary(op, Box::new(e)),
+    <f:BUILTIN_FUN1> "(" <e:Exp> ")" => Exp::Builtin1(f, Box::new(e)),
+    <f:BUILTIN_FUN2> "(" <e1:Exp> "," <e2:Exp> ")" => Exp::Builtin2(f, Box::new(e1), Box::new(e2)),
+    "(" <e:Exp> ")" => e
+};
+
+Lval: Lval = {
+    <id:ID> => Lval::Var(id),
+    <id:ID> "[" <e:Exp> "]" => Lval::Array(id, Box::new(e))
+};
+Lvals: Vec<Lval> = Comma<Lval>;
+
+INT: i64 = {
+    r"0x[0-9a-fA-F]+" => i64::from_str_radix(&<>[2..], 16).unwrap(),
+    r"0b[01]+" => i64::from_str_radix(&<>[2..], 2).unwrap(),
+    r"[0-9]+" => i64::from_str(<>).unwrap()
+};
+
+FLOAT: f64 = r"[+-]?[0-9]+\.[0-9]+(e[+-]?[0-9]+)?" => f64::from_str(<>).unwrap();
+ID: String = r"[a-zA-Z][a-zA-Z0-9_]*" => <>.to_string();
+NAMED_CONSTANT: String = {
+    "pi" => <>.to_string(),
+    "true" => <>.to_string(),
+    "false" => <>.to_string()
+};
+
+// Builtin functions
+BUILTIN_FUN1: String = {
+    "sin" => <>.to_string(),
+    "arcsin" => <>.to_string(),
+    "cos" => <>.to_string(),
+    "arccos" => <>.to_string(),
+    "tan" => <>.to_string(),
+    "exp" => <>.to_string(),
+    "sqrt" => <>.to_string()
+};
+
+BUILTIN_FUN2: String = "arctan2" => "arctan2".to_string();
+
+// Operators
+PE: String = "**" => <>.to_string();
+MD: String = {
+    "*" => <>.to_string(),
+    "/" => <>.to_string(),
+    "&" => <>.to_string(),
+    "%" => <>.to_string()
+};
+
+AS: String = {
+    "xor" => <>.to_string(),
+    "^" => <>.to_string(),
+    "+" => <>.to_string(),
+    "-" => <>.to_string(),
+    "|" => <>.to_string()
+};
+
+CMP: String = {
+    "==" => <>.to_string(),
+    "<" => <>.to_string()
+};
+
+UNOP: String = {
+    "!" => <>.to_string(),
+    "not" => <>.to_string(),
+    "~" => <>.to_string(),
+    "-" => <>.to_string()
+};
+
+// A program is a sequence of procedure declarations. The first procedure is the entry point (like 'main' in C/C++).
+pub Program: Program = { <p:Procedure+> => Program { procedures: p } };
+
+// A procedure declaration consists of a name, a list of parameters, and a statement
+Procedure: Procedure = { 
+    <name:ID> "(" <params:ParameterDeclarations> ")" <body:Statement>
+        => Procedure { name, params, body } 
+};
+
+// Procedure parameter declarations of scalar variables and arrays
+ParameterDeclaration: ParameterDeclaration = {
+      <t:TYPE> <n:ID> => ParameterDeclaration::Scalar{ ty:t, name:n },
+      <t:TYPE> <n:ID> "[" <s:INT> "]" => ParameterDeclaration::ArrayConst{ ty:t, name:n, size:s },
+      <t:TYPE> <n:ID> "[" <s:ID> "]" => ParameterDeclaration::ArrayVar{ ty:t, name:n, size:s }
+};
+ParameterDeclarations: Vec<ParameterDeclaration> = Comma<ParameterDeclaration>;
+
+// Statement can be an assignment, a unitary update of a qbit, a procedure call, a measurement, an if-then-else, a while loop, or a block
+Statement: Statement = {
+      <l:Lval> "=" <e:Exp> ";" => Statement::Assignment(l,e), // Assignment
+      <q:QUpdate> ";" => Statement::QUpdate(q),             // Unitary update of qbit
+      <q:QUpdate> "if" <c:Lval> ";" => Statement::ConditionalQUpdate(q,c),
+      "call" <name:ID> "(" <args:Lvals> ")" ";" => Statement::ProcedureCall(name,args),
+      "measure" <q:Lval> "->" <c:Lval> ";" => Statement::Measure(q,c),
+      "if" "(" <e:Exp> ")" <t:Statement> "else" <f:Statement> => Statement::If(e,Box::new(t),Box::new(f)),
+      "while" "(" <e:Exp> ")" <s:Statement> => Statement::While(e,Box::new(s)),
+      <b:Block> => b
+};
+
+// Declaration can be an uninitialized variable (scalar or array), implicitly initialized to 0;
+// or an initialized scalar variable, or an initialized array.
+Declaration: Declaration = {
+      <t:TYPE> <l:Lval> ";" => Declaration::Uninit{ty:t,lval:l},
+      <t:TYPE> <n:ID> "=" <e:Exp> ";" => Declaration::InitScalar{ty:t,name:n,value:e},
+      <t:TYPE> <n:ID> "[" <s:Exp> "]" "=" "{" <v:Exps> "}" ";" => Declaration::InitArray{ty:t,name:n,size:s,values:v}
+};
+
+// type:  INT_TYPE | FLOAT_TYPE | CBIT_TYPE | QBIT_TYPE
+TYPE: String = {
+      "int" => <>.to_string(),
+      "float" => <>.to_string(),
+      "cbit" => <>.to_string(),
+      "qbit" => <>.to_string()
+};
+
+QUpdate: QUpdate = {
+      <g:Gate> <l:Lval> => QUpdate::Gate(g,l),
+      <a:Lval> "<>" <b:Lval> => QUpdate::Swap(a,b),
+      <a:Lval> "swap" <b:Lval> => QUpdate::Swap(a,b)
+};
+
+Block: Statement = { "{" <d:Declaration*> <s:Statement*> "}" => Statement::Block(d,s) };
+
+procedure_call: Statement = { "call" <name:ID> "(" <args:Lvals> ")" => Statement::ProcedureCall(name,args) };
+
+Gate: Gate = {
+      "not" => Gate::Not,
+      "H" => Gate::H,
+      "Rx" "(" <e:Exp> ")"  => Gate::Rx(e),
+      "Ry" "(" <e:Exp> ")"  => Gate::Ry(e),
+      "Rz" "(" <e:Exp> ")" => Gate::Rz(e),
+      "P" "(" <e:Exp> ")"  => Gate::P(e)
+};
