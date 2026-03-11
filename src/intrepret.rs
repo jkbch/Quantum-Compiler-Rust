@@ -1,53 +1,52 @@
-use std::collections::HashMap;
-use std::f64::consts::PI;
-
 use crate::ast::*;
-use crate::cq::ExpParser; // Assume you already have Exp, Lval, etc. defined
+use crate::cq::ExpParser;
 use crate::helpers::*;
 use crate::reduce::reduce_exp;
+use std::collections::HashMap;
 
 /// Main expression interpreter
-pub fn interpret_exp(e: &Exp, env: &Env) -> Option<Value> {
+pub fn interpret_exp(e: Exp, env: &Env) -> Option<Value> {
     match e {
-        Exp::Int(i) => Some(Value::Scalar(Scalar::Int(*i))),
-        Exp::Float(f) => Some(Value::Scalar(Scalar::Float(*f))),
-        Exp::NamedConst(s) => Some(eval_const(s)),
-        Exp::Lval(l) => match l {
-            Lval::Var(name) => lookup_val(name, env),
-            Lval::Array(name, idx_exp) => {
-                let idx = match interpret_exp(idx_exp, env)? {
-                    Value::Scalar(Scalar::Int(i)) => i as usize,
-                    _ => return None,
-                };
-
-                if let Some(Value::Array(arr)) = lookup_val(name, env) {
-                    match arr {
-                        Array::Int(vec) | Array::Float(vec) | Array::Bool(vec) => {
-                            vec.get(idx).cloned()
-                        }
-                    }
-                } else {
-                    None
-                }
-            }
-        },
+        Exp::Int(i) => Some(Value::Int(i)),
+        Exp::Float(f) => Some(Value::Float(f)),
+        Exp::NamedConst(s) => Some(eval_const(&s)),
+        Exp::Lval(l) => interpret_lval(l, env),
         Exp::Unary(op, e1) => {
-            let v = interpret_exp(e1, env)?;
-            Some(eval_unop(op, v))
+            let v = interpret_exp(*e1, env)?;
+            Some(eval_unop(&op, v))
         }
         Exp::Binary(e1, op, e2) => {
-            let lhs = interpret_exp(e1, env)?;
-            let rhs = interpret_exp(e2, env)?;
-            Some(eval_binop(op, lhs, rhs))
+            let lhs = interpret_exp(*e1, env)?;
+            let rhs = interpret_exp(*e2, env)?;
+            Some(eval_binop(&op, lhs, rhs))
         }
         Exp::Builtin1(f, e1) => {
-            let v = interpret_exp(e1, env)?;
-            Some(eval_fun_1(f, v))
+            let v = interpret_exp(*e1, env)?;
+            Some(eval_fun_1(&f, v))
         }
         Exp::Builtin2(f, e1, e2) => {
-            let lhs = interpret_exp(e1, env)?;
-            let rhs = interpret_exp(e2, env)?;
-            Some(eval_fun_2(f, lhs, rhs))
+            let lhs = interpret_exp(*e1, env)?;
+            let rhs = interpret_exp(*e2, env)?;
+            Some(eval_fun_2(&f, lhs, rhs))
+        }
+    }
+}
+
+pub fn interpret_lval(l: Lval, env: &Env) -> Option<Value> {
+    match l {
+        Lval::Var(name) => lookup_val(&name, env),
+        Lval::Array(name, idx_exp) => {
+            let idx_val = interpret_exp(*idx_exp, env)?;
+            let idx = match idx_val {
+                Value::Int(i) => i as usize,
+                _ => return None,
+            };
+
+            if let Some(Value::Array(arr)) = lookup_val(&name, env) {
+                arr.get(idx).cloned()
+            } else {
+                None
+            }
         }
     }
 }
@@ -113,11 +112,14 @@ pub fn test_expressions() {
 
         let mut env = Vec::new();
         let mut global_scope = HashMap::new();
-        global_scope.insert("a".to_string(), Value::Scalar(Scalar::Int(10)));
-        global_scope.insert("b".to_string(), Value::Array(Array::Int(vec![0, 1, 2])));
+        global_scope.insert("a".to_string(), Value::Int(10));
+        global_scope.insert(
+            "b".to_string(),
+            Value::Array(vec![Value::Int(0), Value::Int(1), Value::Int(2)]),
+        );
         env.push(global_scope);
 
-        let reduced = reduce_exp(&ast, &env);
+        let reduced = reduce_exp(ast, &env);
 
         println!("{} => {:?}", expr, reduced);
     }

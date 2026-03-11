@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let parser = ProgramParser::new();
     let program = parser.parse(code)?;
 
-    println!("{}", show_program(&program));
+    println!("{}", show_program(program));
 
     test_expressions();
 
