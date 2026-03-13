@@ -77,7 +77,7 @@ BUILTIN_FUN1: String = {
     "sqrt" => <>.to_string()
 };
 
-BUILTIN_FUN2: String = "arctan2" => "arctan2".to_string();
+BUILTIN_FUN2: String = "arctan2" => <>.to_string();
 
 // Operators
 PE: String = "**" => <>.to_string();
@@ -161,7 +161,7 @@ QUpdate: QUpdate = {
 
 Block: Statement = { "{" <d:Declaration*> <s:Statement*> "}" => Statement::Block(d,s) };
 
-procedure_call: Statement = { "call" <name:ID> "(" <args:Lvals> ")" => Statement::ProcedureCall(name,args) };
+// procedure_call: Statement = { "call" <name:ID> "(" <args:Lvals> ")" => Statement::ProcedureCall(name,args) };
 
 Gate: Gate = {
       "not" => Gate::Not,

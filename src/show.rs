@@ -1,22 +1,30 @@
 use crate::ast::*;
 
+const INDENT: &str = "  "; // two spaces per level
+
 pub fn show_program(p: Program) -> String {
     p.procedures
         .into_iter()
-        .map(show_procedure)
+        .map(|proc| show_procedure(proc, 0))
         .collect::<Vec<_>>()
         .join("\n\n")
 }
 
-pub fn show_procedure(p: Procedure) -> String {
+pub fn show_procedure(p: Procedure, depth: usize) -> String {
     let params = p
         .params
         .into_iter()
         .map(show_parameter_declaration)
         .collect::<Vec<_>>()
-        .join(",");
-    let body = show_statement(p.body);
-    format!("{}({}){}", p.name, params, body)
+        .join(", ");
+
+    // Ensure top-level body is always a block
+    let body_str = match p.body {
+        Statement::Block(_, _) => show_statement(p.body, depth),
+        other => format!("{{\n{}\n}}", show_statement(other, depth + 1)),
+    };
+
+    format!("{}({}){}", p.name, params, body_str)
 }
 
 pub fn show_parameter_declaration(p: ParameterDeclaration) -> String {
@@ -27,53 +35,62 @@ pub fn show_parameter_declaration(p: ParameterDeclaration) -> String {
     }
 }
 
-pub fn show_statement(s: Statement) -> String {
+pub fn show_statement(s: Statement, depth: usize) -> String {
+    let prefix = INDENT.repeat(depth);
     match s {
-        Statement::Assignment(l, e) => format!("{} = {} ;", show_lval(l), show_exp(e)),
-        Statement::QUpdate(q) => show_qupdate(q),
-        Statement::ConditionalQUpdate(q, c) => format!("{} if {} ;", show_qupdate(q), show_lval(c)),
+        Statement::Assignment(l, e) => format!("{}{} = {} ;", prefix, show_lval(l), show_exp(e)),
+        Statement::QUpdate(q) => format!("{}{} ;", prefix, show_qupdate(q)),
+        Statement::ConditionalQUpdate(q, c) => {
+            format!("{}{} if {} ;", prefix, show_qupdate(q), show_lval(c))
+        }
         Statement::ProcedureCall(name, args) => {
-            let args = args
+            let args_s = args
                 .into_iter()
                 .map(show_lval)
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("call '{}' ({}) ;", name, args)
+            format!("{}call '{}' ({}) ;", prefix, name, args_s)
         }
-        Statement::Measure(q, c) => format!("measure {} -> {} ;", show_lval(q), show_lval(c)),
-        Statement::If(e, t, f) => format!(
-            "if({})\n{}\nelse\n{}",
-            show_exp(e),
-            show_statement(*t),
-            show_statement(*f)
-        ),
-        Statement::While(e, body) => format!("while({})\n{}", show_exp(e), show_statement(*body)),
+        Statement::Measure(q, c) => {
+            format!("{}measure {} -> {} ;", prefix, show_lval(q), show_lval(c))
+        }
+        Statement::If(e, t, f) => {
+            let t_s = show_statement(*t, depth + 1);
+            let f_s = show_statement(*f, depth + 1);
+            format!(
+                "{}if({}) {{\n{}\n{}}} else {{\n{}\n{}}}",
+                prefix,
+                show_exp(e),
+                t_s,
+                prefix,
+                f_s,
+                prefix
+            )
+        }
+        Statement::While(e, body) => {
+            let body_s = show_statement(*body, depth + 1);
+            format!(
+                "{}while({}) {{\n{}\n{}}}",
+                prefix,
+                show_exp(e),
+                body_s,
+                prefix
+            )
+        }
         Statement::Block(decls, stats) => {
-            let decls_s = decls
-                .into_iter()
-                .map(show_declaration)
-                .collect::<Vec<_>>()
-                .join("\n");
-            let stats_s = stats
-                .into_iter()
-                .map(show_statement)
-                .collect::<Vec<_>>()
-                .join("\n");
-            format!("{{\n{}\n{}\n}}\n", decls_s, stats_s)
+            let mut parts = Vec::new();
+            for decl in decls {
+                parts.push(format!(
+                    "{}{}",
+                    INDENT.repeat(depth + 1),
+                    show_declaration(decl)
+                ));
+            }
+            for stat in stats {
+                parts.push(show_statement(stat, depth + 1));
+            }
+            format!("{}{{\n{}\n{}}}", prefix, parts.join("\n"), prefix)
         }
-    }
-}
-
-pub fn show_exp(e: Exp) -> String {
-    match e {
-        Exp::Int(v) => format!("{}", v),
-        Exp::Float(v) => format!("{}", v),
-        Exp::NamedConst(c) => c,
-        Exp::Lval(l) => show_lval(l),
-        Exp::Unary(op, e1) => format!("({} {})", op, show_exp(*e1)),
-        Exp::Binary(l, op, r) => format!("({} {} {})", show_exp(*l), op, show_exp(*r)),
-        Exp::Builtin1(f, e1) => format!("{}({})", f, show_exp(*e1)),
-        Exp::Builtin2(f, e1, e2) => format!("{}({},{})", f, show_exp(*e1), show_exp(*e2)),
     }
 }
 
@@ -89,13 +106,26 @@ pub fn show_declaration(d: Declaration) -> String {
             size,
             values,
         } => {
-            let vals = values
+            let vals_s = values
                 .into_iter()
                 .map(show_exp)
                 .collect::<Vec<_>>()
-                .join(",");
-            format!("{} {}[{}] = [{}] ;", ty, name, show_exp(size), vals)
+                .join(", ");
+            format!("{} {}[{}] = [{}] ;", ty, name, show_exp(size), vals_s)
         }
+    }
+}
+
+pub fn show_exp(e: Exp) -> String {
+    match e {
+        Exp::Int(v) => v.to_string(),
+        Exp::Float(v) => v.to_string(),
+        Exp::NamedConst(c) => c,
+        Exp::Lval(l) => show_lval(l),
+        Exp::Unary(op, e1) => format!("({} {})", op, show_exp(*e1)),
+        Exp::Binary(l, op, r) => format!("({} {} {})", show_exp(*l), op, show_exp(*r)),
+        Exp::Builtin1(f, e1) => format!("{}({})", f, show_exp(*e1)),
+        Exp::Builtin2(f, e1, e2) => format!("{}({},{})", f, show_exp(*e1), show_exp(*e2)),
     }
 }
 

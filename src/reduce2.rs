@@ -2,131 +2,207 @@ use crate::ast::*;
 use crate::helpers::*;
 use crate::intrepret::interpret_exp;
 
-/// Partial evaluator: reduce constant subexpressions in `exp`
-pub fn reduce_exp(exp: &Exp, env: &Env) -> Exp {
-    match exp {
-        Exp::Int(_) | Exp::Float(_) | Exp::NamedConst(_) => exp.clone(),
+pub fn reduce_program(p: Program, env: &mut Env) -> Program {
+    Program {
+        procedures: p
+            .procedures
+            .into_iter()
+            .map(|proc| reduce_procedure(proc, env))
+            .collect(),
+    }
+}
 
-        Exp::Lval(l) => {
-            match l {
-                Lval::Var(name) => {
-                    if let Some(val) = lookup_val(name, env) {
-                        make_const_node(val)
-                    } else {
-                        exp.clone()
-                    }
-                },
-                Lval::Array(name, idx_exp) => {
-                    let idx = match reduce_exp(idx_exp, env) {
-                        Exp::Int(i) => i,
-                        idx_exp => return Exp::Lval(Lval::Array(name.clone(), Box::new(idx_exp.clone()))),
-                    };
+pub fn reduce_procedure(p: Procedure, env: &mut Env) -> Procedure {
+    Procedure {
+        name: p.name,
+        params: p.params,
+        body: reduce_statement(p.body, env),
+    }
+}
 
-                    if let Some(Value::Array(arr)) = lookup_val(name, env) {
-                        if let Some(val) = arr.get(idx as usize).cloned() {
-                            return make_const_node(val)
-                        }
-                    }
-                    return Exp::Lval(Lval::Array(name.clone(), Box::new(Exp::Int(idx))))
+pub fn reduce_parameter_declaration(p: ParameterDeclaration) -> ParameterDeclaration {
+    p
+}
+
+pub fn reduce_statement(s: Statement, env: &mut Env) -> Statement {
+    match s {
+        Statement::Assignment(l, e) => {
+            Statement::Assignment(reduce_lval(l, env), reduce_exp(e, env))
+        }
+
+        Statement::QUpdate(q) => Statement::QUpdate(reduce_qupdate(q, env)),
+
+        Statement::ConditionalQUpdate(q, c) => {
+            Statement::ConditionalQUpdate(reduce_qupdate(q, env), reduce_lval(c, env))
+        }
+
+        Statement::ProcedureCall(name, args) => Statement::ProcedureCall(
+            name,
+            args.into_iter().map(|a| reduce_lval(a, env)).collect(),
+        ),
+
+        Statement::Measure(q, c) => Statement::Measure(reduce_lval(q, env), reduce_lval(c, env)),
+
+        Statement::If(e, t, f) => {
+            let cond = reduce_exp(e, env);
+
+            if is_constant(&cond) {
+                let v = interpret_exp(cond.clone(), env).unwrap();
+                if let Value::Bool(true) = v {
+                    return reduce_statement(*t, env);
+                } else if let Value::Bool(false) = v {
+                    return reduce_statement(*f, env);
                 }
             }
+            Statement::If(
+                cond,
+                Box::new(reduce_statement(*t, env)),
+                Box::new(reduce_statement(*f, env)),
+            )
+        }
+
+        Statement::While(e, body) => {
+            Statement::While(reduce_exp(e, env), Box::new(reduce_statement(*body, env)))
+        }
+
+        Statement::Block(decls, stats) => Statement::Block(
+            decls
+                .into_iter()
+                .map(|d| reduce_declaration(d, env))
+                .collect(),
+            stats
+                .into_iter()
+                .map(|s| reduce_statement(s, env))
+                .collect(),
+        ),
+    }
+}
+
+pub fn reduce_exp(exp: Exp, env: &Env) -> Exp {
+    match exp {
+        Exp::Int(_) | Exp::Float(_) | Exp::NamedConst(_) => exp,
+
+        Exp::Lval(l) => {
+            let l = reduce_lval(l, env);
+
+            if let Lval::Array(name, idx_exp) = &l
+                && let Exp::Int(idx) = **idx_exp
+                && let Some(Value::Array(arr)) = lookup_val(name, env)
+                && let Some(val) = arr.get(idx as usize).cloned()
+            {
+                return make_const_node(val);
+            }
+
+            Exp::Lval(l)
         }
 
         Exp::Unary(op, e1) => {
-            let reduced_e1 = reduce_exp(e1, env);
-            if is_constant(&reduced_e1) {
-                let val = interpret_exp(&reduced_e1, env).unwrap();
-                make_const_node(eval_unop(op, val))
+            let e1 = reduce_exp(*e1, env);
+
+            if is_constant(&e1) {
+                let val = interpret_exp(e1, env).unwrap();
+                make_const_node(eval_unop(&op, val))
             } else {
-                Exp::Unary(op.clone(), Box::new(reduced_e1))
+                Exp::Unary(op, Box::new(e1))
             }
         }
 
         Exp::Binary(e1, op, e2) => {
-            let left = reduce_exp(e1, env);
-            let right = reduce_exp(e2, env);
+            let left = reduce_exp(*e1, env);
+            let right = reduce_exp(*e2, env);
 
             if is_constant(&left) && is_constant(&right) {
-                let lval = interpret_exp(&left, env).unwrap();
-                let rval = interpret_exp(&right, env).unwrap();
-                make_const_node(eval_binop(op, lval, rval))
+                let lval = interpret_exp(left, env).unwrap();
+                let rval = interpret_exp(right, env).unwrap();
+                make_const_node(eval_binop(&op, lval, rval))
             } else {
-                Exp::Binary(Box::new(left), op.clone(), Box::new(right))
+                Exp::Binary(Box::new(left), op, Box::new(right))
             }
         }
 
         Exp::Builtin1(f, e1) => {
-            let reduced_e1 = reduce_exp(e1, env);
-            if is_constant(&reduced_e1) {
-                let val = interpret_exp(&reduced_e1, env).unwrap();
-                make_const_node(eval_fun_1(f, val))
+            let e1 = reduce_exp(*e1, env);
+
+            if is_constant(&e1) {
+                let val = interpret_exp(e1, env).unwrap();
+                make_const_node(eval_fun_1(&f, val))
             } else {
-                Exp::Builtin1(f.clone(), Box::new(reduced_e1))
+                Exp::Builtin1(f, Box::new(e1))
             }
         }
 
         Exp::Builtin2(f, e1, e2) => {
-            let left = reduce_exp(e1, env);
-            let right = reduce_exp(e2, env);
+            let left = reduce_exp(*e1, env);
+            let right = reduce_exp(*e2, env);
 
             if is_constant(&left) && is_constant(&right) {
-                let lval = interpret_exp(&left, env).unwrap();
-                let rval = interpret_exp(&right, env).unwrap();
-                make_const_node(eval_fun_2(f, lval, rval))
+                let lval = interpret_exp(left, env).unwrap();
+                let rval = interpret_exp(right, env).unwrap();
+                make_const_node(eval_fun_2(&f, lval, rval))
             } else {
-                Exp::Builtin2(f.clone(), Box::new(left), Box::new(right))
+                Exp::Builtin2(f, Box::new(left), Box::new(right))
             }
         }
     }
 }
 
-pub fn reduce_declaration(d: &Declaration, &mut env) -> Declaration {
+pub fn reduce_declaration(d: Declaration, env: &mut Env) -> Declaration {
     match d {
-        Declaration::Uninit { ty, lval } => Declaration::Uninit { ty.clone(), lval.clone() },
+        Declaration::Uninit { ty, lval } => Declaration::Uninit {
+            ty,
+            lval: reduce_lval(lval, env),
+        },
+
         Declaration::InitScalar { ty, name, value } => {
-            format!("{} {} = {} ;", ty, name, show_exp(value))
+            let value = reduce_exp(value, env);
+
+            if is_constant(&value) {
+                let val = interpret_exp(value.clone(), env).unwrap();
+                insert_val(env, name.clone(), val);
+            }
+
+            Declaration::InitScalar { ty, name, value }
         }
+
         Declaration::InitArray {
             ty,
             name,
             size,
             values,
         } => {
-            let vals = values.iter().map(show_exp).collect::<Vec<_>>().join(",");
-            format!("{} {}[{}] = [{}] ;", ty, name, show_exp(size), vals)
+            let size = reduce_exp(size, env);
+            let values: Vec<Exp> = values.into_iter().map(|v| reduce_exp(v, env)).collect();
+
+            let all_constants = values.iter().all(is_constant);
+            if is_constant(&size) && all_constants {
+                let vals: Vec<Value> = values
+                    .iter()
+                    .map(|v| interpret_exp(v.clone(), env).unwrap())
+                    .collect();
+                insert_val(env, name.clone(), Value::Array(vals));
+            }
+
+            Declaration::InitArray {
+                ty,
+                name,
+                size,
+                values,
+            }
         }
     }
 }
 
-pub fn reduce_lval(l: &Lval, env: &Env) -> Option<Value> {
+pub fn reduce_lval(l: Lval, env: &Env) -> Lval {
     match l {
-        Lval::Var(name) => {
-            if let Some(val) = lookup_val(name, env) {
-                make_const_node(val)
-            } else {
-                exp.clone()
-            }
-        },
-        Lval::Array(name, idx_exp) => {
-            let idx = match reduce_exp(idx_exp, env) {
-                Exp::Int(i) => i,
-                idx_exp => return Exp::Lval(Lval::Array(name.clone(), Box::new(idx_exp.clone()))),
-            };
-
-            if let Some(Value::Array(arr)) = lookup_val(name, env) {
-                if let Some(val) = arr.get(idx as usize).cloned() {
-                    return make_const_node(val)
-                }
-            }
-            return Exp::Lval(Lval::Array(name.clone(), Box::new(Exp::Int(idx))))
-        }
+        Lval::Var(name) => Lval::Var(name),
+        Lval::Array(name, idx) => Lval::Array(name, Box::new(reduce_exp(*idx, env))),
     }
 }
 
-pub fn reduce_qupdate(q: &QUpdate, env: &Env) -> QUpdate {
+pub fn reduce_qupdate(q: QUpdate, env: &Env) -> QUpdate {
     match q {
-        QUpdate::Gate(g, l) => QUpdate::Gate(reduce_gate(g, env), l.clone()),
-        QUpdate::Swap(a, b) => QUpdate::Swap(a.clone(), b.clone()),
+        QUpdate::Gate(g, l) => QUpdate::Gate(reduce_gate(g, env), reduce_lval(l, env)),
+        QUpdate::Swap(a, b) => QUpdate::Swap(reduce_lval(a, env), reduce_lval(b, env)),
     }
 }
 

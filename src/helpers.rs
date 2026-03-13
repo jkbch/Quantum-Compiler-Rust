@@ -9,24 +9,58 @@ pub enum Value {
     Array(Vec<Value>),
 }
 
-pub type Env = Vec<HashMap<String, Value>>;
-
-/// Lookup a variable or array element in the environment
-pub fn lookup_val(name: &String, env: &Env) -> Option<Value> {
-    for scope in env.iter().rev() {
-        if let Some(val) = scope.get(name) {
-            return Some(val.clone());
-        }
-    }
-    None
+#[derive(Debug, Clone)]
+pub enum Type {
+    Int,
+    Float,
+    Cbit,
+    Qbit,
 }
 
-pub fn value_is_true(v: Value) -> bool {
-    match v {
-        Value::Int(i) => i != 0,
-        Value::Float(f) => f != 0.0,
-        Value::Bool(b) => b,
-        _ => true, // default for other types (arrays, named constants, etc.)
+#[derive(Debug, Clone)]
+pub struct Env<T> {
+    scopes: Vec<HashMap<String, T>>,
+}
+
+impl<T> Env<T> {
+    pub fn new() -> Self {
+        Self {
+            scopes: vec![HashMap::new()],
+        }
+    }
+
+    pub fn push_scope(&mut self) {
+        self.scopes.push(HashMap::new());
+    }
+
+    pub fn pop_scope(&mut self) {
+        if self.scopes.len() > 1 {
+            self.scopes.pop();
+        }
+    }
+
+    pub fn insert(&mut self, name: String, val: T) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.insert(name, val);
+        }
+    }
+
+    pub fn get(&self, name: &str) -> Option<&T> {
+        for scope in self.scopes.iter().rev() {
+            if let Some(val) = scope.get(name) {
+                return Some(val);
+            }
+        }
+        None
+    }
+
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut T> {
+        for scope in self.scopes.iter_mut().rev() {
+            if let Some(val) = scope.get_mut(name) {
+                return Some(val);
+            }
+        }
+        None
     }
 }
 
@@ -39,7 +73,6 @@ pub fn eval_const(s: &str) -> Value {
     }
 }
 
-/// Evaluate a unary operator
 pub fn eval_unop(op: &str, x: Value) -> Value {
     match (op, &x) {
         ("-", Value::Int(i)) => Value::Int(-i),
@@ -50,7 +83,6 @@ pub fn eval_unop(op: &str, x: Value) -> Value {
     }
 }
 
-/// Evaluate a binary operator
 pub fn eval_binop(op: &str, lhs: Value, rhs: Value) -> Value {
     match (&lhs, &rhs) {
         (Value::Int(a), Value::Int(b)) => match op {
@@ -85,7 +117,6 @@ pub fn eval_binop(op: &str, lhs: Value, rhs: Value) -> Value {
     }
 }
 
-/// Evaluate built-in functions
 pub fn eval_fun_1(name: &str, arg: Value) -> Value {
     match (name, &arg) {
         ("sin", Value::Float(f)) => Value::Float(f.sin()),
@@ -113,12 +144,10 @@ pub fn eval_fun_2(name: &str, arg1: Value, arg2: Value) -> Value {
     }
 }
 
-/// Checks if a Value is a constant (Int, Float, NamedConst)
 pub fn is_constant(exp: &Exp) -> bool {
     matches!(exp, Exp::Int(_) | Exp::Float(_) | Exp::NamedConst(_))
 }
 
-/// Constructs a constant expression node from a Value
 pub fn make_const_node(val: Value) -> Exp {
     match val {
         Value::Int(i) => Exp::Int(i),
