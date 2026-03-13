@@ -30,9 +30,21 @@ pub enum Statement {
 
 #[derive(Debug, Clone)]
 pub enum Declaration {
-    Uninit { ty: String, lval: Lval },
-    InitScalar { ty: String, name: String, value: Exp },
-    InitArray { ty: String, name: String, size: Exp, values: Vec<Exp> },
+    Uninit {
+        ty: String,
+        lval: Lval,
+    },
+    InitScalar {
+        ty: String,
+        name: String,
+        value: Exp,
+    },
+    InitArray {
+        ty: String,
+        name: String,
+        size: Exp,
+        values: Vec<Exp>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -48,7 +60,7 @@ pub enum Gate {
     Rx(Exp),
     Ry(Exp),
     Rz(Exp),
-    P(Exp)
+    P(Exp),
 }
 
 #[derive(Debug, Clone)]
@@ -60,12 +72,24 @@ pub struct Procedure {
 
 #[derive(Debug, Clone)]
 pub enum ParameterDeclaration {
-    Scalar { ty: String, name: String },
-    ArrayConst { ty: String, name: String, size: i64 },
-    ArrayVar { ty: String, name: String, size: String },
+    Scalar {
+        ty: String,
+        name: String,
+    },
+    ArrayConst {
+        ty: String,
+        name: String,
+        size: i64,
+    },
+    ArrayVar {
+        ty: String,
+        name: String,
+        size: String,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub struct Program {
     pub procedures: Vec<Procedure>,
 }
+

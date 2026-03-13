@@ -4,11 +4,11 @@ use crate::intrepret::interpret_exp;
 
 const MAX_UNROLL: usize = 10;
 
-pub fn reduce_program(p: Program, mut static_input: Env<Value>) -> Program {
+pub fn reduce_program(p: Program, static_input: Env<Value>) -> Program {
     let procedures: Vec<Procedure> = p
         .procedures
         .into_iter()
-        .map(|proc| reduce_procedure(proc, &mut static_input))
+        .map(|proc| reduce_procedure(proc, &mut static_input.clone()))
         .collect();
 
     Program { procedures }
@@ -35,46 +35,51 @@ fn param_name(param: &ParameterDeclaration) -> String {
 pub fn reduce_statement(s: Statement, env: &mut Env<Value>) -> (Statement, bool) {
     match s {
         Statement::ProcedureCall(name, args) => {
-            let args = args.into_iter().map(|a| reduce_lval(a, env)).collect();
+            let args = args.into_iter().map(|a| reduce_lval(a, env).0).collect();
             (Statement::ProcedureCall(name, args), false)
         }
 
         Statement::Assignment(l, e) => {
-            let l = reduce_lval(l, env);
+            let (l, l_static) = reduce_lval(l, env);
             let (e, e_static) = reduce_exp(e, env);
 
-            if e_static {
+            let stmt_static = e_static && l_static;
+
+            if stmt_static {
                 let val = interpret_exp(e.clone(), env).unwrap();
                 match &l {
                     Lval::Var(name) => env.insert(name.clone(), val),
                     Lval::Array(name, idx_exp) => {
                         if let Exp::Int(idx) = **idx_exp
                             && let Some(Value::Array(arr)) = env.get_mut(name)
+                            && let Some(slot) = arr.get_mut(idx as usize)
                         {
-                            arr[idx as usize] = val;
+                            *slot = val;
                         }
                     }
                 }
             }
 
-            (Statement::Assignment(l, e), e_static)
+            (Statement::Assignment(l, e), stmt_static)
         }
 
         Statement::QUpdate(q) => (Statement::QUpdate(reduce_qupdate(q, env)), false),
 
         Statement::ConditionalQUpdate(q, c) => {
             let q = reduce_qupdate(q, env);
-            let c = reduce_lval(c, env);
+            let (c, _) = reduce_lval(c, env);
             (Statement::ConditionalQUpdate(q, c), false)
         }
 
         Statement::Measure(q, c) => {
-            let q = reduce_lval(q, env);
-            let c = reduce_lval(c, env);
+            let (q, _) = reduce_lval(q, env);
+            let (c, _) = reduce_lval(c, env);
             (Statement::Measure(q, c), false)
         }
 
         Statement::Block(decls, stats) => {
+            env.push_scope();
+
             let mut flat_decls = Vec::new();
             let mut flat_stats = Vec::new();
             let mut all_static = true;
@@ -97,6 +102,8 @@ pub fn reduce_statement(s: Statement, env: &mut Env<Value>) -> (Statement, bool)
                     _ => flat_stats.push(st_res),
                 }
             }
+
+            env.pop_scope();
 
             if flat_decls.is_empty() && flat_stats.len() == 1 {
                 return (flat_stats.pop().unwrap(), all_static);
@@ -122,21 +129,23 @@ pub fn reduce_statement(s: Statement, env: &mut Env<Value>) -> (Statement, bool)
         }
 
         Statement::While(e, body) => {
+            let mut test_env = env.clone();
             let mut res_body = Vec::new();
             let mut unroll_count = 0;
 
             loop {
-                let (cond_exp, cond_static) = reduce_exp(e.clone(), env);
+                let (cond_exp, cond_static) = reduce_exp(e.clone(), &test_env);
 
                 if !cond_static || unroll_count >= MAX_UNROLL {
                     let (body_res, _) = reduce_statement(*body.clone(), env);
                     return (Statement::While(cond_exp, Box::new(body_res)), false);
                 }
 
-                let v = interpret_exp(cond_exp.clone(), env).unwrap();
+                let v = interpret_exp(cond_exp.clone(), &test_env).unwrap();
+
                 match v {
                     Value::Bool(true) => {
-                        let (body_res, _) = reduce_statement(*body.clone(), env);
+                        let (body_res, _) = reduce_statement(*body.clone(), &mut test_env);
                         res_body.push(body_res);
                         unroll_count += 1;
                     }
@@ -145,7 +154,7 @@ pub fn reduce_statement(s: Statement, env: &mut Env<Value>) -> (Statement, bool)
                 }
             }
 
-            // Fully unrolled loop
+            *env = test_env;
             (Statement::Block(Vec::new(), res_body), true)
         }
     }
@@ -154,7 +163,7 @@ pub fn reduce_statement(s: Statement, env: &mut Env<Value>) -> (Statement, bool)
 pub fn reduce_declaration(d: Declaration, env: &mut Env<Value>) -> (Declaration, bool) {
     match d {
         Declaration::Uninit { ty, lval } => {
-            let lval = reduce_lval(lval, env);
+            let (lval, _) = reduce_lval(lval, env);
             (Declaration::Uninit { ty, lval }, false)
         }
 
@@ -164,7 +173,7 @@ pub fn reduce_declaration(d: Declaration, env: &mut Env<Value>) -> (Declaration,
                 let val = interpret_exp(value.clone(), env).unwrap();
                 env.insert(name.clone(), val);
             }
-            (Declaration::InitScalar { ty, name, value }, false) // always keep
+            (Declaration::InitScalar { ty, name, value }, false)
         }
 
         Declaration::InitArray {
@@ -175,12 +184,27 @@ pub fn reduce_declaration(d: Declaration, env: &mut Env<Value>) -> (Declaration,
         } => {
             let (size, _) = reduce_exp(size, env);
 
+            let reduced_values: Vec<Exp> =
+                values.into_iter().map(|v| reduce_exp(v, env).0).collect();
+
+            if reduced_values
+                .iter()
+                .all(|v| matches!(v, Exp::Int(_) | Exp::Float(_) | Exp::NamedConst(_)))
+            {
+                let vals = reduced_values
+                    .iter()
+                    .map(|v| interpret_exp(v.clone(), env).unwrap())
+                    .collect();
+
+                env.insert(name.clone(), Value::Array(vals));
+            }
+
             (
                 Declaration::InitArray {
                     ty,
                     name,
                     size,
-                    values: values.into_iter().map(|v| reduce_exp(v, env).0).collect(),
+                    values: reduced_values,
                 },
                 false,
             )
@@ -193,22 +217,26 @@ pub fn reduce_exp(exp: Exp, env: &Env<Value>) -> (Exp, bool) {
         Exp::Int(_) | Exp::Float(_) | Exp::NamedConst(_) => (exp, true),
 
         Exp::Lval(l) => {
-            let l = reduce_lval(l, env);
-            match &l {
-                Lval::Array(name, idx_exp) => {
-                    if let Exp::Int(idx) = **idx_exp
-                        && let Some(Value::Array(arr)) = env.get(name)
-                        && let Some(val) = arr.get(idx as usize).cloned()
-                    {
-                        return (make_const_node(val), true);
+            let (l, l_static) = reduce_lval(l, env);
+
+            if l_static {
+                match &l {
+                    Lval::Var(name) => {
+                        if let Some(val) = env.get(name).cloned() {
+                            return (make_const_node(val), true);
+                        }
                     }
-                }
-                Lval::Var(name) => {
-                    if let Some(val) = env.get(name).cloned() {
-                        return (make_const_node(val), true);
+                    Lval::Array(name, idx_exp) => {
+                        if let Exp::Int(idx) = **idx_exp
+                            && let Some(Value::Array(arr)) = env.get(name)
+                            && let Some(val) = arr.get(idx as usize).cloned()
+                        {
+                            return (make_const_node(val), true);
+                        }
                     }
                 }
             }
+
             (Exp::Lval(l), false)
         }
 
@@ -258,20 +286,20 @@ pub fn reduce_exp(exp: Exp, env: &Env<Value>) -> (Exp, bool) {
     }
 }
 
-pub fn reduce_lval(l: Lval, env: &Env<Value>) -> Lval {
+pub fn reduce_lval(l: Lval, env: &Env<Value>) -> (Lval, bool) {
     match l {
-        Lval::Var(name) => Lval::Var(name),
+        Lval::Var(name) => (Lval::Var(name), true),
         Lval::Array(name, idx) => {
-            let (idx, _) = reduce_exp(*idx, env);
-            Lval::Array(name, Box::new(idx))
+            let (idx, idx_static) = reduce_exp(*idx, env);
+            (Lval::Array(name, Box::new(idx)), idx_static)
         }
     }
 }
 
 pub fn reduce_qupdate(q: QUpdate, env: &Env<Value>) -> QUpdate {
     match q {
-        QUpdate::Gate(g, l) => QUpdate::Gate(reduce_gate(g, env), reduce_lval(l, env)),
-        QUpdate::Swap(a, b) => QUpdate::Swap(reduce_lval(a, env), reduce_lval(b, env)),
+        QUpdate::Gate(g, l) => QUpdate::Gate(reduce_gate(g, env), reduce_lval(l, env).0),
+        QUpdate::Swap(a, b) => QUpdate::Swap(reduce_lval(a, env).0, reduce_lval(b, env).0),
     }
 }
 

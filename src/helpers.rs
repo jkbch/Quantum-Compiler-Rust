@@ -54,6 +54,15 @@ impl<T> Env<T> {
         None
     }
 
+    pub fn contains(&self, name: &str) -> bool {
+        for scope in self.scopes.iter().rev() {
+            if scope.contains_key(name) {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn get_mut(&mut self, name: &str) -> Option<&mut T> {
         for scope in self.scopes.iter_mut().rev() {
             if let Some(val) = scope.get_mut(name) {
