@@ -145,12 +145,11 @@ Declaration: Declaration = {
       <t:TYPE> <n:ID> "[" <s:Exp> "]" "=" "{" <v:Exps> "}" ";" => Declaration::InitArray{ty:t,name:n,size:s,values:v}
 };
 
-// type:  INT_TYPE | FLOAT_TYPE | CBIT_TYPE | QBIT_TYPE
-TYPE: String = {
-      "int" => <>.to_string(),
-      "float" => <>.to_string(),
-      "cbit" => <>.to_string(),
-      "qbit" => <>.to_string()
+TYPE: Type = {
+      "int" => Type::Int,
+      "float" => Type::Float,
+      "cbit" => Type::Cbit,
+      "qbit" => Type::Qbit
 };
 
 QUpdate: QUpdate = {
@@ -160,8 +159,6 @@ QUpdate: QUpdate = {
 };
 
 Block: Statement = { "{" <d:Declaration*> <s:Statement*> "}" => Statement::Block(d,s) };
-
-// procedure_call: Statement = { "call" <name:ID> "(" <args:Lvals> ")" => Statement::ProcedureCall(name,args) };
 
 Gate: Gate = {
       "not" => Gate::Not,

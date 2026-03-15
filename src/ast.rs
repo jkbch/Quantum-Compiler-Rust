@@ -16,6 +16,14 @@ pub enum Lval {
     Array(String, Box<Exp>),
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum Type {
+    Int,
+    Float,
+    Cbit,
+    Qbit,
+}
+
 #[derive(Debug, Clone)]
 pub enum Statement {
     Assignment(Lval, Exp),
@@ -31,16 +39,16 @@ pub enum Statement {
 #[derive(Debug, Clone)]
 pub enum Declaration {
     Uninit {
-        ty: String,
+        ty: Type,
         lval: Lval,
     },
     InitScalar {
-        ty: String,
+        ty: Type,
         name: String,
         value: Exp,
     },
     InitArray {
-        ty: String,
+        ty: Type,
         name: String,
         size: Exp,
         values: Vec<Exp>,
@@ -73,16 +81,16 @@ pub struct Procedure {
 #[derive(Debug, Clone)]
 pub enum ParameterDeclaration {
     Scalar {
-        ty: String,
+        ty: Type,
         name: String,
     },
     ArrayConst {
-        ty: String,
+        ty: Type,
         name: String,
         size: i64,
     },
     ArrayVar {
-        ty: String,
+        ty: Type,
         name: String,
         size: String,
     },

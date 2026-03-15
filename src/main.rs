@@ -10,54 +10,37 @@ use lalrpop_util::lalrpop_mod;
 use std::{collections::HashMap, fs};
 
 use crate::cq::ProgramParser;
-
 lalrpop_mod!(cq);
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let folder = "./programs"; // Folder with .cq files
-
-    // Collect all .cq files
-    let files: Vec<_> = fs::read_dir(folder)?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.is_file() && path.extension().map(|ext| ext == "cq").unwrap_or(false))
-        .collect();
-
+    let folder = "/home/jakob/Uni/Quantum Compiler/Rust/programs";
+    let files = vec![
+        // "initialize.cq",
+        // "qft.cq",
+        "qft2.cq",
+    ];
     let parser = ProgramParser::new();
 
-    for file_path in files {
-        println!("Processing file: {}", file_path.display());
+    for file_name in files {
+        let file_path = format!("{}/{}", folder, file_name);
+        println!("Processing file: {}", file_path);
+        let code: &'static str = Box::leak(fs::read_to_string(&file_path)?.into_boxed_str());
 
-        let code = fs::read_to_string(&file_path)?;
-        let code: &'static str = Box::leak(code.into_boxed_str());
+        let mut program = parser.parse(code)?;
+        println!("\nOriginal program:\n{}", show_program(&program));
 
-        // Parse the program
-        let program = parser.parse(code)?;
-        println!("\nOriginal program:\n{}", show_program(program.clone()));
-
-        // Initialize static input environment
         let mut static_env = Env::new();
-
-        // Define classical variables for testing
-        // For loops that depend on 'd'
-        static_env.insert("d".to_string(), Value::Int(3));
-
-        // For initialize_2qubit classical array input 'a'
+        static_env.insert("d".to_string(), Value::Scalar(Scalar::Int(3)));
         static_env.insert(
             "a".to_string(),
-            Value::Array(vec![
-                Value::Float(0.5),
-                Value::Float(0.5),
-                Value::Float(0.5),
-                Value::Float(0.5),
-            ]),
+            Value::Array(Array::Float(vec![0.5, 0.5, 0.5, 0.5])),
         );
 
-        // Partially evaluate / reduce the program
-        let reduced_program = reduce_program(program, static_env.clone());
-        let reduced_program = reduce_program(reduced_program, static_env.clone());
+        for _ in 1..3 {
+            program = reduce_program(program, static_env.clone());
+        }
 
-        println!("\nReduced program:\n{}", show_program(reduced_program));
+        println!("\nReduced program:\n{}", show_program(&program));
         println!("--------------------------------------------\n");
     }
 
