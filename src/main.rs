@@ -3,7 +3,9 @@ mod helpers;
 mod intrepret;
 mod reduce;
 mod show;
+mod vars;
 // mod typechecker;
+// mod flatten;
 
 use crate::{helpers::*, reduce::reduce_program, show::*};
 use lalrpop_util::lalrpop_mod;
@@ -26,7 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\nOriginal program:\n{}", show_program(&program));
 
         let mut static_env = Env::new();
-        static_env.insert("d".to_string(), Value::Scalar(Scalar::Int(3)));
+        static_env.insert("d".to_string(), Value::Scalar(Scalar::Int(5)));
         static_env.insert(
             "a".to_string(),
             Value::Array(Array::Float(vec![0.5, 0.5, 0.5, 0.5])),

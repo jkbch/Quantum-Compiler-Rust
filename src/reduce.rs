@@ -1,12 +1,29 @@
-use std::collections::HashMap;
-
 use crate::ast::*;
 use crate::helpers::*;
 use crate::intrepret::interpret_exp;
 use crate::intrepret::interpret_lval;
-use crate::show::show_statement;
+use crate::vars::used_vars_stmt;
 
 const MAX_UNROLL: usize = 5;
+
+fn decl_name(d: &Declaration) -> &String {
+    match d {
+        Declaration::Uninit { lval, .. } => match lval {
+            Lval::Var(name) => name,
+            Lval::Array(name, _) => name,
+        },
+        Declaration::InitScalar { name, .. } => name,
+        Declaration::InitArray { name, .. } => name,
+    }
+}
+
+fn has_decl_collision(outer: &[Declaration], inner: &[Declaration]) -> bool {
+    use std::collections::HashSet;
+
+    let outer_names: HashSet<&String> = outer.iter().map(decl_name).collect();
+
+    inner.iter().any(|d| outer_names.contains(decl_name(d)))
+}
 
 pub fn reduce_program(p: Program, val_env: Env<Value>) -> Program {
     let mut fun_env = FunEnv::new();
@@ -25,16 +42,16 @@ pub fn reduce_program(p: Program, val_env: Env<Value>) -> Program {
 }
 
 pub fn reduce_procedure(p: Procedure, val_env: &mut Env<Value>, fun_env: &mut FunEnv) -> Procedure {
-    let names: Vec<String> = p
-        .params
-        .iter()
-        .map(|p| match p {
-            ParameterDeclaration::Scalar { name, .. } => name.clone(),
-            ParameterDeclaration::ArrayConst { name, .. } => name.clone(),
-            ParameterDeclaration::ArrayVar { name, .. } => name.clone(),
-        })
-        .collect();
-
+    // let names: Vec<String> = p
+    //     .params
+    //     .iter()
+    //     .map(|p| match p {
+    //         ParameterDeclaration::Scalar { name, .. } => name.clone(),
+    //         ParameterDeclaration::ArrayConst { name, .. } => name.clone(),
+    //         ParameterDeclaration::ArrayVar { name, .. } => name.clone(),
+    //     })
+    //     .collect();
+    //
     // let entries: HashMap<String, Option<Value>> =
     //     names.iter().map(|name| (name.clone(), None)).collect();
     //
@@ -43,19 +60,13 @@ pub fn reduce_procedure(p: Procedure, val_env: &mut Env<Value>, fun_env: &mut Fu
     //     val_env.push_scope(entries);
     // }
 
-    let body = reduce_statement(p.body, val_env, fun_env);
+    let body = reduce_statement(p.body.clone(), val_env, fun_env);
 
     // if push_scope {
     //     val_env.pop_scope();
     // }
 
-    fun_env.insert(
-        p.name.clone(),
-        Function {
-            param_names: names,
-            body: body.clone(),
-        },
-    );
+    fun_env.insert(p.name.clone(), p.clone());
 
     Procedure {
         name: p.name,
@@ -66,12 +77,82 @@ pub fn reduce_procedure(p: Procedure, val_env: &mut Env<Value>, fun_env: &mut Fu
 
 pub fn reduce_statement(s: Statement, val_env: &mut Env<Value>, fun_env: &FunEnv) -> Statement {
     match s {
+        // Statement::ProcedureCall(name, args) => {
+        //     let args = args.into_iter().map(|a| reduce_lval(a, val_env)).collect();
+        //
+        //     if let Some(fun) = fun_env.get(&name) {
+        //         // todo rename varibles
+        //         reduce_statement(fun.body.clone(), val_env, fun_env)
+        //     } else {
+        //         Statement::ProcedureCall(name, args)
+        //     }
+        // }
         Statement::ProcedureCall(name, args) => {
-            let args = args.into_iter().map(|a| reduce_lval(a, val_env)).collect();
+            let args: Vec<Lval> = args.into_iter().map(|a| reduce_lval(a, val_env)).collect();
 
-            if let Some(fun) = fun_env.get(&name) {
-                // todo rename varibles
-                reduce_statement(fun.body.clone(), val_env, fun_env)
+            if let Some(proc) = fun_env.get(&name) {
+                let mut decls = Vec::new();
+                let mut stats = Vec::new();
+
+                for (param, arg) in proc.params.iter().zip(args) {
+                    let param_name = match param {
+                        ParameterDeclaration::Scalar { name, .. } => name,
+                        ParameterDeclaration::ArrayConst { name, .. } => name,
+                        ParameterDeclaration::ArrayVar { name, .. } => name,
+                    };
+
+                    let arg_name = match &arg {
+                        Lval::Var(name) => name,
+                        Lval::Array(name, _) => name,
+                    };
+
+                    if param_name != arg_name {
+                        match param {
+                            ParameterDeclaration::Scalar { ty, name } => {
+                                decls.push(Declaration::InitScalar {
+                                    ty: *ty,
+                                    name: name.clone(),
+                                    value: Exp::Lval(arg),
+                                });
+                            }
+
+                            ParameterDeclaration::ArrayConst { ty, name, size } => {
+                                decls.push(Declaration::Uninit {
+                                    ty: *ty,
+                                    lval: Lval::Array(name.clone(), Box::new(Exp::Int(*size))),
+                                });
+
+                                stats.push(Statement::Assignment(
+                                    Lval::Var(name.clone()),
+                                    Exp::Lval(arg),
+                                ));
+                            }
+
+                            ParameterDeclaration::ArrayVar { ty, name, size } => {
+                                decls.push(Declaration::Uninit {
+                                    ty: *ty,
+                                    lval: Lval::Array(
+                                        name.clone(),
+                                        Box::new(Exp::Lval(Lval::Var(size.clone()))),
+                                    ),
+                                });
+
+                                stats.push(Statement::Assignment(
+                                    Lval::Var(name.clone()),
+                                    Exp::Lval(arg),
+                                ));
+                            }
+                        }
+                    }
+                }
+
+                if decls.is_empty() {
+                    reduce_statement(proc.body.clone(), val_env, fun_env)
+                } else {
+                    stats.push(proc.body.clone());
+                    let block = Statement::Block(decls, stats);
+                    reduce_statement(block, val_env, fun_env)
+                }
             } else {
                 Statement::ProcedureCall(name, args)
             }
@@ -152,8 +233,12 @@ pub fn reduce_statement(s: Statement, val_env: &mut Env<Value>, fun_env: &FunEnv
 
                 match reduced {
                     Statement::Block(inner_decls, inner_stats) => {
-                        flat_decls.extend(inner_decls);
-                        flat_stats.extend(inner_stats);
+                        if !has_decl_collision(&flat_decls, &inner_decls) {
+                            flat_decls.extend(inner_decls);
+                            flat_stats.extend(inner_stats);
+                        } else {
+                            flat_stats.push(Statement::Block(inner_decls, inner_stats));
+                        }
                     }
                     _ => flat_stats.push(reduced),
                 }
@@ -162,6 +247,18 @@ pub fn reduce_statement(s: Statement, val_env: &mut Env<Value>, fun_env: &FunEnv
             if push_scope {
                 val_env.pop_scope();
             }
+
+            let used_vars =
+                used_vars_stmt(&Statement::Block(flat_decls.clone(), flat_stats.clone()));
+
+            flat_decls.retain(|d| used_vars.contains(decl_name(d)));
+            flat_stats.retain(|st| match st {
+                Statement::Assignment(l, _) => match l {
+                    Lval::Var(name) => used_vars.contains(name),
+                    Lval::Array(name, _) => used_vars.contains(name),
+                },
+                _ => true,
+            });
 
             if flat_decls.is_empty() && flat_stats.len() == 1 {
                 return flat_stats.pop().unwrap();

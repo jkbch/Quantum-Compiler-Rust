@@ -21,11 +21,11 @@ pub enum Value {
     Array(Array),
 }
 
-pub struct Function {
-    pub param_names: Vec<String>,
-    pub body: Statement,
-}
-pub type FunEnv = HashMap<String, Function>;
+// pub struct Function {
+//     pub param_names: Vec<String>,
+//     pub body: Statement,
+// }
+pub type FunEnv = HashMap<String, Procedure>;
 
 pub fn scalar_to_usize(scalar: Scalar) -> usize {
     match scalar {
