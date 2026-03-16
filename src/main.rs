@@ -7,18 +7,14 @@ mod show;
 
 use crate::{helpers::*, reduce::reduce_program, show::*};
 use lalrpop_util::lalrpop_mod;
-use std::{collections::HashMap, fs};
+use std::fs;
 
 use crate::cq::ProgramParser;
 lalrpop_mod!(cq);
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let folder = "/home/jakob/Uni/Quantum Compiler/Rust/programs";
-    let files = vec![
-        // "initialize.cq",
-        // "qft.cq",
-        "qft2.cq",
-    ];
+    let files = vec!["initialize.cq", "qft.cq", "qft2.cq"];
     let parser = ProgramParser::new();
 
     for file_name in files {
