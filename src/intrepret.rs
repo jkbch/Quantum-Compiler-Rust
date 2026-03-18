@@ -1,7 +1,7 @@
 use crate::ast::*;
 use crate::helpers::*;
 
-pub fn interpret_exp(e: &Exp, env: &Env<Value>) -> Option<Scalar> {
+pub fn interpret_exp(e: &Exp, env: &Env) -> Option<Scalar> {
     match e {
         Exp::Int(i) => Some(Scalar::Int(*i)),
         Exp::Float(f) => Some(Scalar::Float(*f)),
@@ -28,7 +28,7 @@ pub fn interpret_exp(e: &Exp, env: &Env<Value>) -> Option<Scalar> {
     }
 }
 
-pub fn interpret_lval(l: &Lval, env: &Env<Value>) -> Option<Scalar> {
+pub fn interpret_lval(l: &Lval, env: &Env) -> Option<Scalar> {
     match l {
         Lval::Var(name) => match env.get(name) {
             Some(Value::Scalar(val)) => Some(*val),

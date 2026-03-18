@@ -30,23 +30,26 @@ fn collect_exp_vars(e: &Exp, used: &mut HashSet<String>) {
     }
 }
 
-pub fn used_vars_stmt(stmt: &Statement) -> HashSet<String> {
+pub fn used_vars(s: &Statement) -> HashSet<String> {
     let mut used = HashSet::new();
-    match stmt {
-        Statement::Assignment(_, e) => collect_exp_vars(e, &mut used),
-        Statement::Block(decls, stats) => {
+    match s {
+        Statement::Assignment(l, e) => {
+            collect_lval_vars(l, &mut used);
+            collect_exp_vars(e, &mut used);
+        }
+        Statement::Block(_, stats) => {
             for st in stats {
-                used.extend(used_vars_stmt(st));
+                used.extend(used_vars(st));
             }
         }
         Statement::If(cond, t, f) => {
             collect_exp_vars(cond, &mut used);
-            used.extend(used_vars_stmt(t));
-            used.extend(used_vars_stmt(f));
+            used.extend(used_vars(t));
+            used.extend(used_vars(f));
         }
         Statement::While(cond, body) => {
             collect_exp_vars(cond, &mut used);
-            used.extend(used_vars_stmt(body));
+            used.extend(used_vars(body));
         }
         Statement::ProcedureCall(_, args) => {
             for arg in args {

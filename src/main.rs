@@ -28,10 +28,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\nOriginal program:\n{}", show_program(&program));
 
         let mut static_env = Env::new();
-        static_env.insert("d".to_string(), Value::Scalar(Scalar::Int(5)));
+        static_env.insert("d".to_string(), Some(Value::Scalar(Scalar::Int(5))));
         static_env.insert(
             "a".to_string(),
-            Value::Array(Array::Float(vec![0.5, 0.5, 0.5, 0.5])),
+            Some(Value::Array(Array::Float(vec![0.5, 0.5, 0.5, 0.5]))),
         );
 
         for _ in 1..3 {

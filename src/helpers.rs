@@ -1,5 +1,8 @@
 use crate::ast::*;
-use std::{collections::HashMap, f64::consts::PI};
+use std::{
+    collections::{HashMap, HashSet},
+    f64::consts::PI,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Scalar {
@@ -21,10 +24,6 @@ pub enum Value {
     Array(Array),
 }
 
-// pub struct Function {
-//     pub param_names: Vec<String>,
-//     pub body: Statement,
-// }
 pub type FunEnv = HashMap<String, Procedure>;
 
 pub fn scalar_to_usize(scalar: Scalar) -> usize {
@@ -78,11 +77,11 @@ pub fn scalars_to_array(scalars: Vec<Scalar>, ty: Type) -> Array {
 }
 
 #[derive(Debug, Clone)]
-pub struct Env<T> {
-    scopes: Vec<HashMap<String, Option<T>>>,
+pub struct Env {
+    scopes: Vec<HashMap<String, Option<Value>>>,
 }
 
-impl<T> Env<T> {
+impl Env {
     pub fn new() -> Self {
         Self {
             scopes: vec![HashMap::new()],
@@ -106,7 +105,7 @@ impl<T> Env<T> {
         self.scopes.push(HashMap::new());
     }
 
-    pub fn push_scope(&mut self, entries: HashMap<String, Option<T>>) {
+    pub fn push_scope(&mut self, entries: HashMap<String, Option<Value>>) {
         self.scopes.push(entries);
     }
 
@@ -114,39 +113,23 @@ impl<T> Env<T> {
         self.scopes.pop();
     }
 
-    pub fn insert(&mut self, name: String, val: T) {
+    pub fn insert(&mut self, name: String, val: Option<Value>) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(name, Some(val));
+            scope.insert(name, val);
         }
     }
 
-    pub fn insert_none(&mut self, name: String) {
-        if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(name, None);
-        }
-    }
-
-    pub fn update(&mut self, name: &str, val: T) -> bool {
+    pub fn update(&mut self, name: &str, val: Option<Value>) -> bool {
         for scope in self.scopes.iter_mut().rev() {
             if let Some(entry) = scope.get_mut(name) {
-                *entry = Some(val);
+                *entry = val;
                 return true;
             }
         }
         false
     }
 
-    pub fn update_none(&mut self, name: &str) -> bool {
-        for scope in self.scopes.iter_mut().rev() {
-            if let Some(entry) = scope.get_mut(name) {
-                *entry = None;
-                return true;
-            }
-        }
-        false
-    }
-
-    pub fn get(&self, name: &str) -> Option<&T> {
+    pub fn get(&self, name: &str) -> Option<&Value> {
         for scope in self.scopes.iter().rev() {
             if let Some(val) = scope.get(name).and_then(Option::as_ref) {
                 return Some(val);
@@ -155,7 +138,7 @@ impl<T> Env<T> {
         None
     }
 
-    pub fn get_mut(&mut self, name: &str) -> Option<&mut T> {
+    pub fn get_mut(&mut self, name: &str) -> Option<&mut Value> {
         for scope in self.scopes.iter_mut().rev() {
             if let Some(val) = scope.get_mut(name).and_then(Option::as_mut) {
                 return Some(val);
@@ -164,16 +147,30 @@ impl<T> Env<T> {
         None
     }
 
-    pub fn contains(&self, name: &str) -> bool {
+    pub fn const_vars(&self) -> HashSet<String> {
+        let mut const_vars = HashSet::new();
+
+        for scope in &self.scopes {
+            for (name, var) in scope {
+                if !var.is_some() {
+                    const_vars.insert(name.clone());
+                }
+            }
+        }
+
+        const_vars
+    }
+
+    pub fn contains_value(&self, name: &str) -> bool {
         for scope in self.scopes.iter().rev() {
-            if scope.contains_key(name) {
-                return true;
+            if let Some(val) = scope.get(name) {
+                return val.is_some();
             }
         }
         false
     }
 
-    pub fn remove(&mut self, name: &str) -> Option<T> {
+    pub fn remove(&mut self, name: &str) -> Option<Value> {
         for scope in self.scopes.iter_mut().rev() {
             if let Some(val) = scope.remove(name).flatten() {
                 return Some(val);
