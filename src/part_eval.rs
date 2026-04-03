@@ -1,74 +1,47 @@
+use crate::ast::*;
+use crate::eval::{eval_exp, eval_lval};
+use crate::helper::*;
+use crate::vars::used_vars;
 use std::collections::HashSet;
 
-use crate::ast::*;
-use crate::helpers::*;
-use crate::intrepret::interpret_exp;
-use crate::intrepret::interpret_lval;
-use crate::vars::used_vars;
+const MAX_UNROLL: usize = 1000;
 
-const MAX_UNROLL: usize = 5;
+pub fn part_eval_program(p: Program, mut env: ValueEnv) -> Program {
+    let proc: Vec<Procedure> = p
+        .procedures
+        .into_iter()
+        .enumerate()
+        .map(|(i, proc)| part_eval_procedure(proc, &mut env.clone(), None, i == 0))
+        .collect();
 
-fn decl_name(d: &Declaration) -> &String {
-    match d {
-        Declaration::Uninit { lval, .. } => match lval {
-            Lval::Var(name) => name,
-            Lval::Array(name, _) => name,
-        },
-        Declaration::InitScalar { name, .. } => name,
-        Declaration::InitArray { name, .. } => name,
-    }
-}
-
-fn has_decl_collision(outer: &[Declaration], inner: &[Declaration]) -> bool {
-    use std::collections::HashSet;
-
-    let outer_names: HashSet<&String> = outer.iter().map(decl_name).collect();
-
-    inner.iter().any(|d| outer_names.contains(decl_name(d)))
-}
-
-pub fn reduce_program(p: Program, env: Env) -> Program {
-    let mut fun_env = FunEnv::new();
-    let mut procedures = p.procedures;
-
-    for _ in 0..2 {
-        procedures = procedures
-            .into_iter()
-            .map(|proc| reduce_procedure(proc, &mut env.clone(), &mut fun_env))
-            .collect();
-    }
+    let main = proc[0].clone();
+    let map = proc.into_iter().map(|p| (p.name.clone(), p)).collect();
 
     Program {
-        procedures: vec![procedures[0].clone()],
+        procedures: vec![part_eval_procedure(main, &mut env, Some(&map), true)],
     }
 }
 
-pub fn reduce_procedure(p: Procedure, env: &mut Env, fun_env: &mut FunEnv) -> Procedure {
-    // let names: Vec<String> = p
-    //     .params
-    //     .iter()
-    //     .map(|p| match p {
-    //         ParameterDeclaration::Scalar { name, .. } => name.clone(),
-    //         ParameterDeclaration::ArrayConst { name, .. } => name.clone(),
-    //         ParameterDeclaration::ArrayVar { name, .. } => name.clone(),
-    //     })
-    //     .collect();
-    //
-    // let entries: HashMap<String, Option<Value>> =
-    //     names.iter().map(|name| (name.clone(), None)).collect();
-    //
-    // let push_scope = !entries.is_empty();
-    // if push_scope {
-    //     val_env.push_scope(entries);
-    // }
+pub fn part_eval_procedure(
+    p: Procedure,
+    env: &mut ValueEnv,
+    map: Option<&ProcMap>,
+    is_main: bool,
+) -> Procedure {
+    if !is_main {
+        let entries = p
+            .params
+            .iter()
+            .map(|p| (param_decl_name(p).clone(), None))
+            .collect();
+        env.push_scope(entries);
+    };
 
-    let body = reduce_statement(p.body.clone(), env, fun_env);
+    let body = part_eval_statement(p.body.clone(), env, map);
 
-    // if push_scope {
-    //     val_env.pop_scope();
-    // }
-
-    fun_env.insert(p.name.clone(), p.clone());
+    if !is_main {
+        env.pop_scope();
+    }
 
     Procedure {
         name: p.name,
@@ -77,22 +50,16 @@ pub fn reduce_procedure(p: Procedure, env: &mut Env, fun_env: &mut FunEnv) -> Pr
     }
 }
 
-pub fn reduce_statement(s: Statement, env: &mut Env, fun_env: &FunEnv) -> Statement {
+pub fn part_eval_statement(s: Statement, env: &mut ValueEnv, map: Option<&ProcMap>) -> Statement {
     match s {
-        // Statement::ProcedureCall(name, args) => {
-        //     let args = args.into_iter().map(|a| reduce_lval(a, val_env)).collect();
-        //
-        //     if let Some(fun) = fun_env.get(&name) {
-        //         // todo rename varibles
-        //         reduce_statement(fun.body.clone(), val_env, fun_env)
-        //     } else {
-        //         Statement::ProcedureCall(name, args)
-        //     }
-        // }
         Statement::ProcedureCall(name, args) => {
-            let args: Vec<Lval> = args.into_iter().map(|a| reduce_lval(a, env)).collect();
+            let args: Vec<Lval> = args.into_iter().map(|a| part_eval_lval(a, env)).collect();
 
-            if let Some(proc) = fun_env.get(&name) {
+            if let Some(map) = map {
+                let proc = map
+                    .get(&name)
+                    .unwrap_or_else(|| panic!("Undefined procedure {}", name));
+
                 let mut decls = Vec::new();
                 let mut stats = Vec::new();
 
@@ -149,11 +116,11 @@ pub fn reduce_statement(s: Statement, env: &mut Env, fun_env: &FunEnv) -> Statem
                 }
 
                 if decls.is_empty() {
-                    reduce_statement(proc.body.clone(), env, fun_env)
+                    part_eval_statement(proc.body.clone(), env, Some(map))
                 } else {
                     stats.push(proc.body.clone());
                     let block = Statement::Block(decls, stats);
-                    reduce_statement(block, env, fun_env)
+                    part_eval_statement(block, env, Some(map))
                 }
             } else {
                 Statement::ProcedureCall(name, args)
@@ -161,18 +128,18 @@ pub fn reduce_statement(s: Statement, env: &mut Env, fun_env: &FunEnv) -> Statem
         }
 
         Statement::Assignment(l, e) => {
-            let l = reduce_lval(l, env);
-            let e = reduce_exp(e, env);
+            let l = part_eval_lval(l, env);
+            let e = part_eval_exp(e, env);
 
             if is_const_node(&e) {
-                let val = interpret_exp(&e, env).unwrap();
+                let val = eval_exp(&e, env).unwrap();
 
                 match &l {
                     Lval::Var(name) => {
                         env.update(name, Some(Value::Scalar(val)));
                     }
                     Lval::Array(name, idx) => {
-                        if let Some(idx) = interpret_exp(idx, env)
+                        if let Some(idx) = eval_exp(idx, env)
                             && let Some(Value::Array(arr)) = env.get_mut(name)
                         {
                             let i = scalar_to_usize(idx);
@@ -194,30 +161,22 @@ pub fn reduce_statement(s: Statement, env: &mut Env, fun_env: &FunEnv) -> Statem
             Statement::Assignment(l, e)
         }
 
-        Statement::QUpdate(q) => Statement::QUpdate(reduce_qupdate(q, env)),
+        Statement::QUpdate(q) => Statement::QUpdate(part_eval_qupdate(q, env)),
 
         Statement::ConditionalQUpdate(q, c) => {
-            let q = reduce_qupdate(q, env);
-            let c = reduce_lval(c, env);
+            let q = part_eval_qupdate(q, env);
+            let c = part_eval_lval(c, env);
             Statement::ConditionalQUpdate(q, c)
         }
 
         Statement::Measure(q, c) => {
-            let q = reduce_lval(q, env);
-            let c = reduce_lval(c, env);
+            let q = part_eval_lval(q, env);
+            let c = part_eval_lval(c, env);
             Statement::Measure(q, c)
         }
 
         Statement::Block(decls, stats) => {
-            // println!("{:?}", decls);
-            // println!("{:?}", val_env);
-            // println!(
-            //     "{}",
-            //     show_statement(&Statement::Block(decls.clone(), stats.clone()), 0)
-            // );
-
             let push_scope = !decls.is_empty();
-
             if push_scope {
                 env.push_empty_scope();
             }
@@ -226,16 +185,20 @@ pub fn reduce_statement(s: Statement, env: &mut Env, fun_env: &FunEnv) -> Statem
             let mut flat_stats = Vec::new();
 
             for d in decls {
-                let reduced = reduce_declaration(d, env);
+                let reduced = part_eval_declaration(d, env);
                 flat_decls.push(reduced);
             }
+            let outer_names: HashSet<String> = flat_decls.iter().map(decl_name).cloned().collect();
 
             for st in stats {
-                let reduced = reduce_statement(st, env, fun_env);
+                let reduced = part_eval_statement(st, env, map);
 
                 match reduced {
                     Statement::Block(inner_decls, inner_stats) => {
-                        if !has_decl_collision(&flat_decls, &inner_decls) {
+                        let has_collision = inner_decls
+                            .iter()
+                            .any(|d| outer_names.contains(decl_name(d)));
+                        if !has_collision {
                             flat_decls.extend(inner_decls);
                             flat_stats.extend(inner_stats);
                         } else {
@@ -243,7 +206,7 @@ pub fn reduce_statement(s: Statement, env: &mut Env, fun_env: &FunEnv) -> Statem
                         }
                     }
                     Statement::Assignment(l, e) => {
-                        if !is_const_node(&e) {
+                        if !is_const_node(&e) || map.is_none() {
                             flat_stats.push(Statement::Assignment(l, e))
                         }
                     }
@@ -255,8 +218,10 @@ pub fn reduce_statement(s: Statement, env: &mut Env, fun_env: &FunEnv) -> Statem
                 env.pop_scope();
             }
 
-            let used_vars: HashSet<String> = flat_stats.iter().flat_map(used_vars).collect();
-            flat_decls.retain(|d| used_vars.contains(decl_name(d)));
+            if map.is_some() {
+                let used_vars: HashSet<String> = flat_stats.iter().flat_map(used_vars).collect();
+                flat_decls.retain(|d| used_vars.contains(decl_name(d)));
+            }
 
             if flat_decls.is_empty() && flat_stats.len() == 1 {
                 return flat_stats.pop().unwrap();
@@ -266,17 +231,17 @@ pub fn reduce_statement(s: Statement, env: &mut Env, fun_env: &FunEnv) -> Statem
         }
 
         Statement::If(e, t, f) => {
-            let cond = reduce_exp(e, env);
+            let cond = part_eval_exp(e, env);
             if is_const_node(&cond) {
-                let v = interpret_exp(&cond, env).unwrap();
+                let v = eval_exp(&cond, env).unwrap();
                 match v {
-                    Scalar::Cbit(true) => reduce_statement(*t, env, fun_env),
-                    Scalar::Cbit(false) => reduce_statement(*f, env, fun_env),
+                    Scalar::Cbit(true) => part_eval_statement(*t, env, map),
+                    Scalar::Cbit(false) => part_eval_statement(*f, env, map),
                     _ => panic!("If condition must be boolean"),
                 }
             } else {
-                let t_res = reduce_statement(*t, env, fun_env);
-                let f_res = reduce_statement(*f, env, fun_env);
+                let t_res = part_eval_statement(*t, env, map);
+                let f_res = part_eval_statement(*f, env, map);
                 Statement::If(cond, Box::new(t_res), Box::new(f_res))
             }
         }
@@ -286,11 +251,9 @@ pub fn reduce_statement(s: Statement, env: &mut Env, fun_env: &FunEnv) -> Statem
             let mut iters = Vec::new();
 
             for _ in 0..MAX_UNROLL {
-                let v = interpret_exp(&e, &mut iter_env);
-                // println!("{:?}", v);
-                match v {
+                match eval_exp(&e, &iter_env) {
                     Some(Scalar::Cbit(true)) => {
-                        iters.push(reduce_statement(*body.clone(), &mut iter_env, fun_env));
+                        iters.push(part_eval_statement(*body.clone(), &mut iter_env, map));
                     }
                     Some(Scalar::Cbit(false)) => {
                         *env = iter_env;
@@ -305,10 +268,10 @@ pub fn reduce_statement(s: Statement, env: &mut Env, fun_env: &FunEnv) -> Statem
     }
 }
 
-pub fn reduce_declaration(d: Declaration, env: &mut Env) -> Declaration {
+pub fn part_eval_declaration(d: Declaration, env: &mut ValueEnv) -> Declaration {
     match d {
         Declaration::Uninit { ty, lval } => {
-            let lval = reduce_lval(lval, env);
+            let lval = part_eval_lval(lval, env);
             match &lval {
                 Lval::Var(name) => match ty {
                     Type::Cbit => {
@@ -321,7 +284,7 @@ pub fn reduce_declaration(d: Declaration, env: &mut Env) -> Declaration {
                     Type::Qbit => env.insert(name.clone(), None),
                 },
                 Lval::Array(name, e) => {
-                    if let Some(idx) = interpret_exp(e, env) {
+                    if let Some(idx) = eval_exp(e, env) {
                         let n = scalar_to_usize(idx);
                         match ty {
                             Type::Cbit => env.insert(
@@ -357,9 +320,9 @@ pub fn reduce_declaration(d: Declaration, env: &mut Env) -> Declaration {
         }
 
         Declaration::InitScalar { ty, name, value } => {
-            let value = reduce_exp(value, env);
+            let value = part_eval_exp(value, env);
             if is_const_node(&value) {
-                let val = interpret_exp(&value, env).unwrap();
+                let val = eval_exp(&value, env).unwrap();
                 env.insert(name.clone(), Some(Value::Scalar(scalar_to_scalar(val, ty))));
             } else {
                 env.insert(name.clone(), None);
@@ -373,14 +336,11 @@ pub fn reduce_declaration(d: Declaration, env: &mut Env) -> Declaration {
             size,
             values,
         } => {
-            let size = reduce_exp(size, env);
-            let exps: Vec<Exp> = values.into_iter().map(|v| reduce_exp(v, env)).collect();
+            let size = part_eval_exp(size, env);
+            let exps: Vec<Exp> = values.into_iter().map(|v| part_eval_exp(v, env)).collect();
 
             if exps.iter().all(is_const_node) {
-                let vals: Vec<Scalar> = exps
-                    .iter()
-                    .map(|v| interpret_exp(v, env).unwrap())
-                    .collect();
+                let vals: Vec<Scalar> = exps.iter().map(|v| eval_exp(v, env).unwrap()).collect();
 
                 // todo handle array sizes
 
@@ -399,13 +359,13 @@ pub fn reduce_declaration(d: Declaration, env: &mut Env) -> Declaration {
     }
 }
 
-pub fn reduce_exp(exp: Exp, env: &Env) -> Exp {
+pub fn part_eval_exp(exp: Exp, env: &ValueEnv) -> Exp {
     match exp {
         Exp::Int(_) | Exp::Float(_) | Exp::NamedConst(_) => exp,
 
         Exp::Lval(l) => {
-            let l = reduce_lval(l, env);
-            if let Some(val) = interpret_lval(&l, env) {
+            let l = part_eval_lval(l, env);
+            if let Some(val) = eval_lval(&l, env) {
                 make_const_node(val)
             } else {
                 Exp::Lval(l)
@@ -413,22 +373,22 @@ pub fn reduce_exp(exp: Exp, env: &Env) -> Exp {
         }
 
         Exp::Unary(op, e1) => {
-            let e1 = reduce_exp(*e1, env);
+            let e1 = part_eval_exp(*e1, env);
             if is_const_node(&e1) {
-                make_const_node(eval_unop(&op, interpret_exp(&e1, env).unwrap()))
+                make_const_node(eval_unop(&op, eval_exp(&e1, env).unwrap()))
             } else {
                 Exp::Unary(op, Box::new(e1))
             }
         }
 
         Exp::Binary(e1, op, e2) => {
-            let e1 = reduce_exp(*e1, env);
-            let e2 = reduce_exp(*e2, env);
+            let e1 = part_eval_exp(*e1, env);
+            let e2 = part_eval_exp(*e2, env);
             if is_const_node(&e1) && is_const_node(&e2) {
                 make_const_node(eval_binop(
                     &op,
-                    interpret_exp(&e1, env).unwrap(),
-                    interpret_exp(&e2, env).unwrap(),
+                    eval_exp(&e1, env).unwrap(),
+                    eval_exp(&e2, env).unwrap(),
                 ))
             } else {
                 Exp::Binary(Box::new(e1), op, Box::new(e2))
@@ -436,22 +396,22 @@ pub fn reduce_exp(exp: Exp, env: &Env) -> Exp {
         }
 
         Exp::Builtin1(f, e1) => {
-            let e1 = reduce_exp(*e1, env);
+            let e1 = part_eval_exp(*e1, env);
             if is_const_node(&e1) {
-                make_const_node(eval_fun_1(&f, interpret_exp(&e1, env).unwrap()))
+                make_const_node(eval_fun_1(&f, eval_exp(&e1, env).unwrap()))
             } else {
                 Exp::Builtin1(f, Box::new(e1))
             }
         }
 
         Exp::Builtin2(f, e1, e2) => {
-            let e1 = reduce_exp(*e1, env);
-            let e2 = reduce_exp(*e2, env);
+            let e1 = part_eval_exp(*e1, env);
+            let e2 = part_eval_exp(*e2, env);
             if is_const_node(&e1) && is_const_node(&e2) {
                 make_const_node(eval_fun_2(
                     &f,
-                    interpret_exp(&e1, env).unwrap(),
-                    interpret_exp(&e2, env).unwrap(),
+                    eval_exp(&e1, env).unwrap(),
+                    eval_exp(&e2, env).unwrap(),
                 ))
             } else {
                 Exp::Builtin2(f, Box::new(e1), Box::new(e2))
@@ -460,31 +420,30 @@ pub fn reduce_exp(exp: Exp, env: &Env) -> Exp {
     }
 }
 
-pub fn reduce_lval(l: Lval, env: &Env) -> Lval {
-    // todo scope prefix
+pub fn part_eval_lval(l: Lval, env: &ValueEnv) -> Lval {
     match l {
         Lval::Var(name) => Lval::Var(name),
         Lval::Array(name, idx) => {
-            let idx = reduce_exp(*idx, env);
+            let idx = part_eval_exp(*idx, env);
             Lval::Array(name, Box::new(idx))
         }
     }
 }
 
-pub fn reduce_qupdate(q: QUpdate, env: &Env) -> QUpdate {
+pub fn part_eval_qupdate(q: QUpdate, env: &ValueEnv) -> QUpdate {
     match q {
-        QUpdate::Gate(g, l) => QUpdate::Gate(reduce_gate(g, env), reduce_lval(l, env)),
-        QUpdate::Swap(a, b) => QUpdate::Swap(reduce_lval(a, env), reduce_lval(b, env)),
+        QUpdate::Gate(g, l) => QUpdate::Gate(part_eval_gate(g, env), part_eval_lval(l, env)),
+        QUpdate::Swap(a, b) => QUpdate::Swap(part_eval_lval(a, env), part_eval_lval(b, env)),
     }
 }
 
-pub fn reduce_gate(g: Gate, env: &Env) -> Gate {
+pub fn part_eval_gate(g: Gate, env: &ValueEnv) -> Gate {
     match g {
         Gate::Not => Gate::Not,
         Gate::H => Gate::H,
-        Gate::Rx(e) => Gate::Rx(reduce_exp(e, env)),
-        Gate::Ry(e) => Gate::Ry(reduce_exp(e, env)),
-        Gate::Rz(e) => Gate::Rz(reduce_exp(e, env)),
-        Gate::P(e) => Gate::P(reduce_exp(e, env)),
+        Gate::Rx(e) => Gate::Rx(part_eval_exp(e, env)),
+        Gate::Ry(e) => Gate::Ry(part_eval_exp(e, env)),
+        Gate::Rz(e) => Gate::Rz(part_eval_exp(e, env)),
+        Gate::P(e) => Gate::P(part_eval_exp(e, env)),
     }
 }

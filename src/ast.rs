@@ -16,7 +16,7 @@ pub enum Lval {
     Array(String, Box<Exp>),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Type {
     Int,
     Float,
@@ -100,4 +100,3 @@ pub enum ParameterDeclaration {
 pub struct Program {
     pub procedures: Vec<Procedure>,
 }
-
