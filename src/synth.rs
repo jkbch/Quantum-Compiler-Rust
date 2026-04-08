@@ -1,5 +1,5 @@
 use crate::ast::*;
-use crate::eval::eval_exp;
+use crate::eval::{eval_exp, eval_lval};
 use crate::helper::*;
 use std::collections::HashMap;
 use std::f64::consts::{FRAC_PI_2, PI};
@@ -78,6 +78,9 @@ pub fn synth_program(p: &Program, env: ValueEnv) -> Vec<Op> {
     let mut cbits = Bits::new(&env);
 
     for proc in &p.procedures {
+        for param in proc.params.iter() {
+            synth_parameter_declaration(param, &mut qbits, &mut cbits, &env);
+        }
         synth_statement(&proc.body, &mut ops, &mut qbits, &mut cbits, &env);
     }
 
@@ -102,8 +105,8 @@ pub fn synth_parameter_declaration(
             _ => {}
         },
         ParameterDeclaration::ArrayVar { ty, name, size } => {
-            let size_exp = Exp::NamedConst(size.clone());
-            let size_val = eval_exp(&size_exp, env).unwrap(); // Evaluate to Value
+            let size_lval = Lval::Var(size.clone());
+            let size_val = eval_lval(&size_lval, env).unwrap(); // Evaluate to Value
             let size_usize = scalar_to_usize(size_val);
 
             match ty {
